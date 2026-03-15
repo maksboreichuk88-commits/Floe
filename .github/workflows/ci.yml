@@ -67,6 +67,26 @@ jobs:
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
 
+  smart-contract-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Run Forge Tests
+        working-directory: ./contracts
+        run: forge test -vvv --gas-report
+
+      - name: Run Web3 Security SAST (Slither)
+        uses: crytic/slither-action@v0.3.0
+        with:
+          target: 'contracts/'
+          slither-args: '--fail-high'
+
   release:
     needs: [test, security]
     if: startsWith(github.ref, 'refs/tags/')
