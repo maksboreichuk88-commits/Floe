@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: floe-egress-policy
+  namespace: floe-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: floe
+  policyTypes:
+    - Egress
+  egress:
+    # 1. Allow DNS resolution (required to look up api.openai.com etc)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # 2. Allow outbound HTTPS specifically to known LLM providers.
+    # To mitigate data exfiltration through untrusted destinations if the app is compromised.
+    - to:
+        # OpenAI
+        - ipBlock: { cidr: 20.203.242.0/24 } # Example: Azure / OpenAI IPs
+        - ipBlock: { cidr: 104.18.0.0/16 }   # Example: Cloudflare / Anthropic APIs
+        # Adjust cidr blocks based on specific provider endpoints
+      ports:
+        - protocol: TCP
+          port: 443
+
+    # 3. Deny everything else by not defining it

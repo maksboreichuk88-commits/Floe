@@ -1,0 +1,24 @@
+# Binaries
+floe
+floe.exe
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Data directories (local development only)
+data/
+*.db
+*.db-journal
+*.db-wal
+vault/secrets.enc
+
+# Logs
+*.log
+
+# Workspace / IDE
+.vscode/
+.idea/
+
+# Local lockfiles
+.floe.lock

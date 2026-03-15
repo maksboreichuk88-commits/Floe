@@ -1,0 +1,51 @@
+services:
+  floe:
+    build: .
+    image: ghcr.io/floe-dev/floe:latest
+    container_name: floe-gateway
+    restart: unless-stopped
+    
+    # Expose the unified gateway endpoint
+    ports:
+      - "127.0.0.1:4400:4400"
+      - "127.0.0.1:4401:4401" # Next.js Dashboard
+    
+    # Mount persistent data directory
+    volumes:
+      - ./data:/data
+    
+    # Load environment variables
+    env_file:
+      - .env
+    
+    # ----------------------------------------------------
+    # HARDENING & CVE-2026-25253 (OpenClaw) MITIGATIONS
+    # ----------------------------------------------------
+    
+    # 1. Prevent modification of the container filesystem
+    read_only: true
+    
+    # 2. Allow writing only to the intended persistent volume
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    
+    # 3. Drop ALL Linux capabilities (chown, dac_override, fowner, fsetid, kill, setgid, setuid, setpcap, net_bind_service, net_raw, sys_chroot, mknod, audit_write, setfcap)
+    cap_drop:
+      - ALL
+      
+    # 4. Prevent privilege escalation (setuid/setgid binaries will fail)
+    security_opt:
+      - no-new-privileges:true
+      
+    # 5. Resource limits to prevent DoS via infinite loops or memory leaks
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 512M
+    
+    # 6. Restrict the number of processes Floe can spawn
+    pids_limit: 100
+    
+    # 7. Use the strict scratch-based non-root user
+    user: "65534:65534"

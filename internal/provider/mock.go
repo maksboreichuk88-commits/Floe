@@ -1,0 +1,187 @@
+package provider
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+)
+
+// MockProvider implements the Provider interface with configurable behavior.
+// Used for testing, demos, and the `floe demo` command.
+type MockProvider struct {
+	id         string
+	failAfter  int // Number of successful requests before failing
+	latency    time.Duration
+	mu         sync.Mutex
+	reqCount   int
+	shouldFail bool
+}
+
+// MockConfig configures a mock provider.
+type MockConfig struct {
+	ID        string
+	Latency   time.Duration // Simulated response delay
+	FailAfter int           // Start failing after N requests (0 = never fail)
+}
+
+// NewMockProvider creates a mock provider for testing and demos.
+func NewMockProvider(cfg MockConfig) *MockProvider {
+	latency := cfg.Latency
+	if latency == 0 {
+		latency = 100 * time.Millisecond
+	}
+
+	return &MockProvider{
+		id:        cfg.ID,
+		latency:   latency,
+		failAfter: cfg.FailAfter,
+	}
+}
+
+func (p *MockProvider) ID() string   { return p.id }
+func (p *MockProvider) Name() string { return "Mock" }
+
+func (p *MockProvider) Models() []ModelInfo {
+	return []ModelInfo{
+		{ID: "mock-fast", Name: "Mock Fast", Provider: "mock", ContextSize: 4096, CostPer1KPromptTokens: 0.001, CostPer1KCompletionTokens: 0.002},
+		{ID: "mock-quality", Name: "Mock Quality", Provider: "mock", ContextSize: 32768, CostPer1KPromptTokens: 0.01, CostPer1KCompletionTokens: 0.03},
+	}
+}
+
+func (p *MockProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+	if err := p.checkFailure(); err != nil {
+		return nil, err
+	}
+
+	select {
+	case <-time.After(p.latency):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	lastMsg := ""
+	if len(req.Messages) > 0 {
+		lastMsg = req.Messages[len(req.Messages)-1].Content
+	}
+
+	response := generateMockResponse(lastMsg)
+	promptTokens := estimateTokens(lastMsg)
+	completionTokens := estimateTokens(response)
+
+	return &ChatResponse{
+		ID:      fmt.Sprintf("mock-%d", time.Now().UnixNano()),
+		Model:   req.Model,
+		Content: response,
+		Usage: Usage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
+		},
+		CreatedAt: time.Now(),
+	}, nil
+}
+
+func (p *MockProvider) StreamChat(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
+	if err := p.checkFailure(); err != nil {
+		return nil, err
+	}
+
+	lastMsg := ""
+	if len(req.Messages) > 0 {
+		lastMsg = req.Messages[len(req.Messages)-1].Content
+	}
+
+	response := generateMockResponse(lastMsg)
+	words := strings.Fields(response)
+
+	ch := make(chan StreamChunk, 32)
+	go func() {
+		defer close(ch)
+		for i, word := range words {
+			select {
+			case <-ctx.Done():
+				ch <- StreamChunk{Err: ctx.Err()}
+				return
+			case <-time.After(50 * time.Millisecond):
+				separator := " "
+				if i == 0 {
+					separator = ""
+				}
+				ch <- StreamChunk{Content: separator + word}
+			}
+		}
+		promptTokens := estimateTokens(lastMsg)
+		completionTokens := estimateTokens(response)
+		ch <- StreamChunk{
+			Done: true,
+			Usage: &Usage{
+				PromptTokens:     promptTokens,
+				CompletionTokens: completionTokens,
+				TotalTokens:      promptTokens + completionTokens,
+			},
+		}
+	}()
+
+	return ch, nil
+}
+
+func (p *MockProvider) HealthCheck(ctx context.Context) error {
+	if p.shouldFail {
+		return fmt.Errorf("mock provider is in failure mode")
+	}
+	return nil
+}
+
+// SetFailing forces the mock provider into failure mode.
+func (p *MockProvider) SetFailing(fail bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.shouldFail = fail
+}
+
+func (p *MockProvider) checkFailure() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.shouldFail {
+		return fmt.Errorf("mock provider failure (simulated)")
+	}
+
+	p.reqCount++
+	if p.failAfter > 0 && p.reqCount > p.failAfter {
+		p.shouldFail = true
+		return fmt.Errorf("mock provider failure after %d requests (simulated)", p.failAfter)
+	}
+
+	return nil
+}
+
+func generateMockResponse(input string) string {
+	lower := strings.ToLower(input)
+	switch {
+	case strings.Contains(lower, "hello") || strings.Contains(lower, "hi"):
+		return "Hello! I'm a mock AI provider running inside Floe. I simulate responses for testing and demonstrations. How can I help you explore Floe's capabilities?"
+	case strings.Contains(lower, "summarize"):
+		return "Here's a summary: The provided content discusses key concepts related to the topic at hand. The main points are: 1) establishing context, 2) presenting core arguments, and 3) drawing conclusions based on the evidence presented."
+	case strings.Contains(lower, "translate"):
+		return "Translation: This is a mock translation response. In a production environment, this would be processed by a real language model through the Floe gateway."
+	case strings.Contains(lower, "code") || strings.Contains(lower, "function"):
+		return "```python\ndef example_function(data):\n    \"\"\"Process data through the pipeline.\"\"\"\n    result = transform(data)\n    return validate(result)\n```\nThis is a mock code response generated by the Floe demo provider."
+	default:
+		return fmt.Sprintf("Mock response for: %q. This response was routed through Floe's gateway with circuit breaking, rate limiting, and audit logging active. Token usage and costs are being tracked in real-time.", truncate(input, 100))
+	}
+}
+
+func estimateTokens(s string) int {
+	// Rough estimation: ~4 characters per token
+	return len(s) / 4
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
